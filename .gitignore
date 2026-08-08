@@ -1,0 +1,4 @@
+.venv/
+naver_session.json
+.env
+__pycache__/
