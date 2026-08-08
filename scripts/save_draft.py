@@ -80,18 +80,34 @@ def main():
 
         # "작성 중인 글이 있습니다 / 이어서 작성하시겠습니까?" 팝업은 mainFrame 안에서 뜬다.
         # 취소를 눌러 이전 임시저장 내용을 버리고 새 글로 시작한다.
+        # (역할 기반 검색은 툴바의 "취소선 적용" 버튼과 이름이 겹쳐 strict mode 에러가 나므로
+        #  팝업 전용 클래스로 정확히 짚는다.)
         try:
-            cancel_btn = frame.get_by_role("button", name="취소")
-            if cancel_btn.is_visible(timeout=3000):
-                cancel_btn.click()
-                print("이어서 작성 팝업 -> 취소 클릭, 새 글로 시작")
-                frame.wait_for_timeout(1000)
+            cancel_btn = frame.locator(".se-popup-button-cancel")
+            cancel_btn.wait_for(state="visible", timeout=3000)
+            cancel_btn.click()
+            print("이어서 작성 팝업 -> 취소 클릭, 새 글로 시작")
+            frame.locator(".se-popup-dim").wait_for(state="hidden", timeout=5000)
+            frame.wait_for_timeout(500)
         except Exception as e:
             print(f"이어서 작성 팝업 없음 또는 처리 실패: {e}")
 
+        # 우측 "도움말" 패널이 열려 있으면 저장/발행 버튼이 있는 자리를 덮어버리므로 먼저 닫는다.
+        # (페이지 레벨 UI라 mainFrame 밖에 있음. 닫기 버튼이 항상 우상단 고정 위치에 뜬다.)
+        try:
+            help_close = page.get_by_role("button", name="닫기")
+            help_close.first.click(timeout=3000)
+            page.wait_for_timeout(300)
+            print("도움말 패널 닫음")
+        except Exception:
+            try:
+                page.mouse.click(1222, 42)
+                page.wait_for_timeout(300)
+                print("도움말 패널 닫음 (좌표 클릭)")
+            except Exception as e:
+                print(f"도움말 패널 닫기 실패(무시하고 진행): {e}")
+
         page.screenshot(path=str(ROOT / "debug_01_frame_loaded.png"))
-        print(f".se-title-text .se-text-paragraph 개수: {frame.locator('.se-title-text .se-text-paragraph').count()}")
-        print(f".se-main-container .se-text-paragraph 개수: {frame.locator('.se-main-container .se-text-paragraph').count()}")
 
         # 제목 입력 — 바깥 컨테이너가 아니라 실제 커서가 들어가는 안쪽 문단 요소를 클릭해야 한다.
         # 이어서 작성 팝업을 취소해도 에디터에 잔존 텍스트가 남아있을 수 있으므로,
@@ -108,9 +124,12 @@ def main():
             print(f"제목 입력 중 문제 발생: {e}")
         page.screenshot(path=str(ROOT / "debug_02_after_title.png"))
 
-        # 본문 입력: 제목과 마찬가지로 안쪽 문단 요소(.se-text-paragraph)를 직접 클릭해서 포커스를 준다.
+        # 본문 입력: ".se-main-container"는 이 에디터 버전에 존재하지 않는다(진단 결과 0개).
+        # 프레임 전체에서 .se-text-paragraph는 정확히 2개뿐이며(제목 1개 + 본문 1개),
+        # 제목이 먼저 나오므로 마지막 요소가 본문 문단이다.
         try:
-            body_para = frame.locator(".se-main-container .se-text-paragraph").first
+            body_para = frame.locator(".se-text-paragraph").last
+            body_para.wait_for(state="visible", timeout=8000)
             body_para.click(timeout=5000)
             page.wait_for_timeout(300)
             page.keyboard.press("Control+a")
@@ -129,19 +148,31 @@ def main():
         page.screenshot(path=str(ROOT / "debug_04_before_save.png"), full_page=True)
 
         # 저장(임시저장) 버튼 클릭 — 상단 헤더의 "저장" 버튼(발행 버튼과는 다름).
+        # 이 버튼은 mainFrame이 아니라 별도의 상단 툴바 iframe 안에 있을 수 있으므로
+        # page 레벨과 모든 하위 프레임을 차례로 시도한다.
         saved = False
-        try:
-            save_btn = page.get_by_role("button", name=re.compile("^저장"))
-            save_btn.first.click(timeout=5000)
-            saved = True
-        except Exception as e:
-            print(f"'저장' 버튼(role=button) 클릭 실패: {e}")
+        candidates = [("page", page)] + [(f"frame[{i}]:{f.url}", f) for i, f in enumerate(page.frames)]
+        for label, target in candidates:
             try:
-                save_btn = page.locator("text=저장").first
-                save_btn.click(timeout=5000)
+                save_btn = target.get_by_role("button", name=re.compile("^저장"))
+                save_btn.first.click(timeout=3000)
                 saved = True
-            except Exception as e2:
-                print(f"'저장' 텍스트 클릭도 실패: {e2}")
+                print(f"'저장' 버튼 클릭 성공 ({label})")
+                break
+            except Exception:
+                continue
+
+        if not saved:
+            print("'저장' 버튼(role=button) 클릭 실패 — text 셀렉터로 재시도")
+            for label, target in candidates:
+                try:
+                    save_btn = target.locator(".se-toolbar-button:has-text('저장'), button:has-text('저장')").first
+                    save_btn.click(timeout=3000)
+                    saved = True
+                    print(f"'저장' 텍스트 클릭 성공 ({label})")
+                    break
+                except Exception:
+                    continue
 
         page.wait_for_timeout(1500)
         page.screenshot(path=str(ROOT / "debug_05_after_save.png"), full_page=True)
